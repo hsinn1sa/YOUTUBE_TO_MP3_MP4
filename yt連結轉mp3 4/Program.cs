@@ -13,7 +13,7 @@ namespace yt連結轉mp3_4
     internal static class Program
     {
         // 🎯 1. 軟體目前版本（故意寫 1.0.0 舊版，等一下才能測試自動更新）
-        private static readonly string CurrentAppVersion = "1.0.4";
+        private static readonly string CurrentAppVersion = "1.0.5";
 
         // 🎯 2. 你的 GitHub 帳號
         private static readonly string GitHubUser = "hsinn1sa";
