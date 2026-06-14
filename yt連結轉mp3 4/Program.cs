@@ -13,7 +13,7 @@ namespace yt連結轉mp3_4
     internal static class Program
     {
         // 🎯 1. 軟體目前版本（故意寫 1.0.0 舊版，等一下才能測試自動更新）
-        private static readonly string CurrentAppVersion = "1.0.0";
+        private static readonly string CurrentAppVersion = "1.0.4";
 
         // 🎯 2. 你的 GitHub 帳號
         private static readonly string GitHubUser = "hsinn1sa";
@@ -57,12 +57,14 @@ namespace yt連結轉mp3_4
                     client.DefaultRequestHeaders.UserAgent.ParseAdd("request");
                     string url = $"https://api.github.com/repos/{GitHubUser}/{GitHubRepo}/releases/latest";
 
-                    var json = await client.GetStringAsync(url);
-                    var match = Regex.Match(json, @"""tag_name"":\s*""v?([\d\.]+)""");
+                    string json = await client.GetStringAsync(url);
 
-                    if (match.Success)
+                    var tagMatch = Regex.Match(json, @"""tag_name"":\s*""v?([\d\.]+)""");
+                    var downloadMatch = Regex.Match(json, @"""browser_download_url"":\s*""([^""]+\.exe)""");
+
+                    if (tagMatch.Success)
                     {
-                        string latestAppVersion = match.Groups[1].Value;
+                        string latestAppVersion = tagMatch.Groups[1].Value;
 
                         // 🔍 發現新版本！
                         if (CurrentAppVersion != latestAppVersion)
@@ -75,58 +77,57 @@ namespace yt連結轉mp3_4
 
                             if (result == DialogResult.Yes)
                             {
-                                // 尋找 GitHub 上的 exe 下載連結 (在 Assets 裡面)
-                                var browserDownloadUrlMatch = Regex.Match(json, @"""browser_download_url"":\s*""([^""]+\.exe)""");
-                                if (!browserDownloadUrlMatch.Success)
+                                if (!downloadMatch.Success)
                                 {
-                                    // 如果找不到直接的 exe，就退一步找 Release 網頁網址
-                                    var htmlUrlMatch = Regex.Match(json, @"""html_url"":\s*""([^""]+)""");
-                                    if (htmlUrlMatch.Success)
-                                    {
-                                        Process.Start(new ProcessStartInfo { FileName = htmlUrlMatch.Groups[1].Value, UseShellExecute = true });
-                                    }
+                                    MessageBox.Show("抓取更新檔下載連結失敗！", "更新提示");
                                     return false;
                                 }
 
-                                string downloadUrl = browserDownloadUrlMatch.Groups[1].Value;
-                                string currentExePath = Application.ExecutablePath;
-                                string newExePath = Path.Combine(Application.StartupPath, "new_version.tmp");
+                                string downloadUrl = downloadMatch.Groups[1].Value;
+                                string currentExePath = Application.ExecutablePath; // 當前正在執行的舊 exe 路徑
+                                string startupPath = Application.StartupPath;
 
-                                // 提示使用者正在背景下載
-                                // 注意：此時 Form1 還沒開，所以畫一個簡單的提示
+                                // 定義路徑
+                                string tempDownloadPath = Path.Combine(startupPath, "new_version.tmp");
+                                string updateExePath = Path.Combine(startupPath, "update_assistant.exe");
+
+                                // 提示正在下載
                                 Task.Run(() => MessageBox.Show("正在背景下載更新檔，請稍候...", "下載中", MessageBoxButtons.OK, MessageBoxIcon.Information));
 
-                                // 下載新版的 exe
+                                // 1. 下載新版檔案到暫存檔
                                 byte[] fileBytes = await client.GetByteArrayAsync(downloadUrl);
-                                File.WriteAllBytes(newExePath, fileBytes);
+                                File.WriteAllBytes(tempDownloadPath, fileBytes);
 
-                                // 啟動「新下載的檔案」並傳入覆蓋參數，同時把當前舊版的路徑傳過去給它改名
+                                // 2. 清除上次殘留的助理，並把剛剛下載好的新靈魂複製一份當作更新助理
+                                if (File.Exists(updateExePath)) { try { File.Delete(updateExePath); } catch { } }
+                                File.Copy(tempDownloadPath, updateExePath, true);
+
+                                // 3. 啟動更新助理，並把「當前被鎖定的舊 exe 路徑」傳給它
                                 Process.Start(new ProcessStartInfo
                                 {
-                                    FileName = newExePath,
+                                    FileName = updateExePath,
                                     Arguments = $"/update-apply \"{currentExePath}\"",
                                     UseShellExecute = true
                                 });
 
-                                // 回傳 false，不要啟動目前舊版本的 Form1，讓主程式立刻退場解鎖
+                                // 4. 舊程式立刻閃退，放開檔案鎖定！
+                                Environment.Exit(0);
                                 return false;
                             }
                             else
                             {
-                                // 使用者選否，不給用舊版，直接退出
                                 return false;
                             }
                         }
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // 如果斷網或 GitHub 掛掉，為了讓使用者能盲用，直接放行進入主程式
+                MessageBox.Show($"檢查更新時發生連線錯誤：{ex.Message}", "偵錯提示");
                 return true;
             }
 
-            // 沒有新版本，放行
             return true;
         }
 
@@ -142,25 +143,28 @@ namespace yt連結轉mp3_4
                 if (args.Length < 3) return;
                 string targetExePath = args[2];
 
-                // 休息 1.5 秒，確保原本的舊版主程式已經完全閃退並釋放檔案鎖定
-                Thread.Sleep(1500);
+                // 🎯 強力保險：等足 2 秒，確保舊版主程式已經完全閃退、釋放檔案鎖定
+                Thread.Sleep(2000);
 
-                string tempExePath = Application.ExecutablePath; // 當前正在執行的 new_version.tmp
+                string tempExePath = Application.ExecutablePath; // 當前正在執行的 update_assistant.exe
                 string backupExePath = targetExePath + ".bak";
 
-                // 刪除上一次遺留的備份檔
-                if (File.Exists(backupExePath)) File.Delete(backupExePath);
+                // 1. 刪除上一次遺留的備份檔
+                if (File.Exists(backupExePath)) { try { File.Delete(backupExePath); } catch { } }
 
-                // 把原本的舊版主程式改名為 .bak 備份（騰出空位）
-                if (File.Exists(targetExePath)) File.Move(targetExePath, backupExePath);
+                // 2. 把原本的舊版主程式改名為 .bak 備份（騰出空位）
+                if (File.Exists(targetExePath))
+                {
+                    File.Move(targetExePath, backupExePath);
+                }
 
-                // 把自己複製過去取代原本的舊主程式路徑
+                // 3. 把自己（新版程式）複製過去，取代原本舊主程式的路徑！
                 File.Copy(tempExePath, targetExePath, true);
 
-                // 重新啟動那台已經變成全新版本的主程式！
+                // 4. 重新啟動那台已經變成全新版本的主程式！
                 Process.Start(new ProcessStartInfo { FileName = targetExePath, UseShellExecute = true });
 
-                // 用殘留的指令碼在背景等自己關閉後，把這個暫存的 new_version.tmp 砍掉
+                // 5. 用 CMD 延遲 1 秒（等自己安全退出後），把這個暫存的 update_assistant.exe 砍掉
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
